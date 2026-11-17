@@ -54,7 +54,8 @@ def bootstrap_headless_token(auth_dir: Path):
         "consumer_key": client_id,
         "consumer_secret": client_secret,
         "guid": guid,
-        "refresh_token": n        "token_time": token_time,
+        "refresh_token": token_payload.get("refresh_token", refresh_token),        
+        "token_time": token_time,
         "token_type": token_type,
     }
     (auth_dir / "token.json").write_text(json.dumps(token_data, indent=2))
