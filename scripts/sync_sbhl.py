@@ -51,6 +51,16 @@ def bootstrap_headless_token(auth_dir: Path):
         "token_type": token_payload.get("token_type", "bearer"),
     }
     (auth_dir / "token.json").write_text(json.dumps(token_data, indent=2))
+    env_lines = [
+        f"YAHOO_CONSUMER_KEY={client_id}",
+        f"YAHOO_CONSUMER_SECRET={client_secret}",
+        f"YAHOO_ACCESS_TOKEN={token_data['access_token']}",
+        f"YAHOO_REFRESH_TOKEN={token_data['refresh_token']}",
+        f"YAHOO_GUID={token_data['guid']}",
+        f"YAHOO_TOKEN_TIME={token_data['token_time']}",
+        f"YAHOO_TOKEN_TYPE={token_data['token_type']}",
+    ]
+    (auth_dir / ".env").write_text("\n".join(env_lines) + "\n")
     (auth_dir / "private.json").write_text(
         json.dumps({"consumer_key": client_id, "consumer_secret": client_secret}, indent=2)
     )
