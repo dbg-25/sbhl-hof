@@ -1,0 +1,39 @@
+name: Weekly SBHL Stat Sync
+
+on:
+  schedule:
+    - cron: "0 11 * * 1"
+  workflow_dispatch:
+
+jobs:
+  sync-yahoo-stats:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set Up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: pip install yfpy requests
+
+      - name: Run SBHL Stat Engine
+        env:
+          YAHOO_CLIENT_ID: ${{ secrets.YAHOO_CLIENT_ID }}
+          YAHOO_CLIENT_SECRET: ${{ secrets.YAHOO_CLIENT_SECRET }}
+          YAHOO_REFRESH_TOKEN: ${{ secrets.YAHOO_REFRESH_TOKEN }}
+        run: python scripts/sync_sbhl.py
+
+      - name: Commit & Push Updated SBHL Database
+        run: |
+          git config user.name "SBHL Stat Bot"
+          git config user.email "bot@sbhl.local"
+          git add public/data/sbhl_db.json
+          git diff --staged --quiet || git commit -m "chore: automated weekly SBHL stat sync"
+          git push
