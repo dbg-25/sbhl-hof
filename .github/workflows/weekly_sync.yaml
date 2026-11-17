@@ -32,8 +32,8 @@ jobs:
 
       - name: Commit & Push Updated SBHL Database
         run: |
-          git config user.name "SBHL Stat Bot"
-          git config user.email "bot@sbhl.local"
+          git config user.name "dbg-25"
+          git config user.email "255912282+dbg-25@users.noreply.github.com"
           git add public/data/sbhl_db.json
           git diff --staged --quiet || git commit -m "chore: automated weekly SBHL stat sync"
           git push
