@@ -20,9 +20,9 @@ def unwrap(obj):
 
 def bootstrap_headless_token(auth_dir: Path):
     """Exchanges the permanent Yahoo refresh token for a fresh access token in CI/CD."""
-    client_id = os.environ["YAHOO_CLIENT_ID"]
-    client_secret = os.environ["YAHOO_CLIENT_SECRET"]
-    refresh_token = os.environ["YAHOO_REFRESH_TOKEN"]
+    client_id = os.environ.get("YAHOO_CLIENT_ID", "").strip().strip("\"").strip("\x27")
+    client_secret = os.environ.get("YAHOO_CLIENT_SECRET", "").strip().strip("\"").strip("\x27")
+    refresh_token = os.environ.get("YAHOO_REFRESH_TOKEN", "").strip().strip("\"").strip("\x27")
 
     encoded = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     resp = requests.post(
@@ -33,12 +33,12 @@ def bootstrap_headless_token(auth_dir: Path):
         },
         data={
             "grant_type": "refresh_token",
-            "redirect_uri": "oob",
+            "redirect_uri": "https://localhost:8080",
             "refresh_token": refresh_token,
         },
         timeout=30,
     )
-    resp.raise_for_status()
+    print(f"Yahoo OAuth status {resp.status_code}: {resp.text}" if not resp.ok else "Yahoo OAuth token refreshed!"); resp.raise_for_status()
     token_payload = resp.json()
 
     token_data = {
@@ -60,8 +60,8 @@ def discover_sbhl_seasons(auth_dir: Path) -> dict[str, tuple[str, int]]:
     base_query = YahooFantasySportsQuery(
         league_id="0",
         game_code="nhl",
-        yahoo_consumer_key=os.environ["YAHOO_CLIENT_ID"],
-        yahoo_consumer_secret=os.environ["YAHOO_CLIENT_SECRET"],
+        yahoo_consumer_key=os.environ.get("YAHOO_CLIENT_ID", "").strip().strip("\"").strip("\x27"),
+        yahoo_consumer_secret=os.environ.get("YAHOO_CLIENT_SECRET", "").strip().strip("\"").strip("\x27"),
         env_file_location=auth_dir,
     )
 
@@ -118,8 +118,8 @@ def discover_sbhl_seasons(auth_dir: Path) -> dict[str, tuple[str, int]]:
                     league_id=l_id_str,
                     game_code="nhl",
                     game_id=int(g_id_str),
-                    yahoo_consumer_key=os.environ["YAHOO_CLIENT_ID"],
-                    yahoo_consumer_secret=os.environ["YAHOO_CLIENT_SECRET"],
+                    yahoo_consumer_key=os.environ.get("YAHOO_CLIENT_ID", "").strip().strip("\"").strip("\x27"),
+                    yahoo_consumer_secret=os.environ.get("YAHOO_CLIENT_SECRET", "").strip().strip("\"").strip("\x27"),
                     env_file_location=auth_dir,
                 )
                 meta = q.get_league_metadata()
@@ -165,8 +165,8 @@ def build_hof_database():
             league_id=league_id,
             game_code="nhl",
             game_id=game_id,
-            yahoo_consumer_key=os.environ["YAHOO_CLIENT_ID"],
-            yahoo_consumer_secret=os.environ["YAHOO_CLIENT_SECRET"],
+            yahoo_consumer_key=os.environ.get("YAHOO_CLIENT_ID", "").strip().strip("\"").strip("\x27"),
+            yahoo_consumer_secret=os.environ.get("YAHOO_CLIENT_SECRET", "").strip().strip("\"").strip("\x27"),
             env_file_location=auth_dir,
         )
 
