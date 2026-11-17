@@ -7,10 +7,11 @@ from pathlib import Path
 from collections import defaultdict
 from yfpy.query import YahooFantasySportsQuery
 
-# Case-insensitive keywords used to locate SBHL in your Yahoo NHL history
-LEAGUE_NAME_KEYWORDS = ["sbhl", "south bay"]
+SEED_LEAGUE_ID = "ew_refresh,"
 
-# Optional: Map Yahoo GUIDs to real names so team name changes always roll up cleanly
+# Yahoo NHL game_ids from 2018-19 through 2027-28 to auto-locate your seed league
+CANDIDATE_NHL_GAME_IDS = [475, 465, 453, 427, 419, 411, 403, 396, 386, 380]
+
 MANAGER_NAME_MAP = {
     # "YAHOO_GUID_HERE": "Donovan",
 }
@@ -20,9 +21,9 @@ def unwrap(obj):
 
 def bootstrap_headless_token(auth_dir: Path):
     """Exchanges the permanent Yahoo refresh token for a fresh access token in CI/CD."""
-    client_id = os.environ.get("YAHOO_CLIENT_ID", "").strip().strip("\"").strip("\x27")
-    client_secret = os.environ.get("YAHOO_CLIENT_SECRET", "").strip().strip("\"").strip("\x27")
-    refresh_token = os.environ.get("YAHOO_REFRESH_TOKEN", "").strip().strip("\"").strip("\x27")
+    client_id = os.environ.get("YAHOO_CLIENT_ID", "").strip().strip('"').strip("'")
+    client_secret = os.environ.get("YAHOO_CLIENT_SECRET", "").strip().strip('"').strip("'")
+    refresh_token = os.environ.get("YAHOO_REFRESH_TOKEN", "").strip().strip('"').strip("'")
 
     encoded = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     resp = requests.post(
@@ -38,109 +39,106 @@ def bootstrap_headless_token(auth_dir: Path):
         },
         timeout=30,
     )
-    print(f"Yahoo OAuth status {resp.status_code}: {resp.text}" if not resp.ok else "Yahoo OAuth token refreshed!"); resp.raise_for_status()
+    print(f"Yahoo OAuth status {resp.status_code}: {resp.text}" if not resp.ok else "Yahoo OAuth token refreshed!")
+    resp.raise_for_status()
     token_payload = resp.json()
 
+    access_token = token_payload["access_token"]
+    new_refresh = token_payload.get("refresh_token", refresh_token)
+    guid = token_payload.get("xoauth_yahoo_guid", "")
+    token_time = time.time()
+    token_type = token_payload.get("token_type", "bearer")
+
     token_data = {
-        "access_token": token_payload["access_token"],
+        "access_token": access_token,
         "consumer_key": client_id,
         "consumer_secret": client_secret,
-        "guid": token_payload.get("xoauth_yahoo_guid", ""),
-        "refresh_token": token_payload.get("refresh_token", refresh_token),
-        "token_time": time.time(),
-        "token_type": token_payload.get("token_type", "bearer"),
+        "guid": guid,
+        "refresh_token": n        "token_time": token_time,
+        "token_type": token_type,
     }
     (auth_dir / "token.json").write_text(json.dumps(token_data, indent=2))
-    env_lines = [
-        f"YAHOO_CONSUMER_KEY={client_id}",
-        f"YAHOO_CONSUMER_SECRET={client_secret}",
-        f"YAHOO_ACCESS_TOKEN={token_data['access_token']}",
-        f"YAHOO_REFRESH_TOKEN={token_data['refresh_token']}",
-        f"YAHOO_GUID={token_data['guid']}",
-        f"YAHOO_TOKEN_TIME={token_data['token_time']}",
-        f"YAHOO_TOKEN_TYPE={token_data['token_type']}",
-    ]
-    (auth_dir / ".env").write_text("\n".join(env_lines) + "\n")
     (auth_dir / "private.json").write_text(
         json.dumps({"consumer_key": client_id, "consumer_secret": client_secret}, indent=2)
     )
+    env_lines = [
+        f"YAHOO_CONSUMER_KEY={client_id}",
+        f"YAHOO_CONSUMER_SECRET={client_secret}",
+        f"YAHOO_ACCESS_TOKEN={access_token}",
+        f"YAHOO_REFRESH_TOKEN={new_refresh}",
+        f"YAHOO_GUID={guid}",
+        f"YAHOO_TOKEN_TIME={token_time}",
+        f"YAHOO_TOKEN_TYPE={token_type}",
+    ]
+    (auth_dir / ".env").write_text("\n".join(env_lines) + "\n")
 
 def discover_sbhl_seasons(auth_dir: Path) -> dict[str, tuple[str, int]]:
-    """Dynamically discovers all historical and active SBHL seasons."""
-    base_query = YahooFantasySportsQuery(
-        league_id="0",
-        game_code="nhl",
-        yahoo_consumer_key=os.environ.get("YAHOO_CLIENT_ID", "").strip().strip("\"").strip("\x27"),
-        yahoo_consumer_secret=os.environ.get("YAHOO_CLIENT_SECRET", "").strip().strip("\"").strip("\x27"),
-        env_file_location=auth_dir,
-    )
-
+    """Finds the seed SBHL league and walks Yahoo's renew/renewed chain across all past and future seasons."""
     discovered_seasons = {}
-    all_user_leagues = {}
-    seed_keys = set()
+    queue = []
+    visited = set()
 
-    user_games = base_query.get_user_games() or []
-    for g_wrap in user_games:
-        game = getattr(unwrap(g_wrap), "game", unwrap(g_wrap))
-        if str(getattr(game, "code", "")).lower() != "nhl":
-            continue
+    # 1. Resolve current/latest NHL game_id dynamically plus known NHL game_ids
+    game_ids_to_try = []
+    try:
+        q_game = YahooFantasySportsQuery(
+            league_id=SEED_LEAGUE_ID,
+            game_code="nhl",
+            env_file_location=auth_dir,
+            save_token_data_to_env_file=True,
+        )
+        curr_gid = int(q_game.get_current_game_info().game_id)
+        game_ids_to_try.append(curr_gid)
+    except Exception:
+        pass
 
-        game_id = int(game.game_id)
-        season_str = str(game.season)
+    for gid in CANDIDATE_NHL_GAME_IDS:
+        if gid not in game_ids_to_try:
+            game_ids_to_try.append(gid)
 
+    # 2. Locate the seed league without touching /users;use_login=1
+    for gid in game_ids_to_try:
         try:
-            leagues = base_query.get_user_leagues_by_game_key(game_id) or []
+            q = YahooFantasySportsQuery(
+                league_id=SEED_LEAGUE_ID,
+                game_code="nhl",
+                game_id=gid,
+                env_file_location=auth_dir,
+                save_token_data_to_env_file=True,
+            )
+            meta = q.get_league_metadata()
+            raw_name = meta.name.decode("utf-8") if isinstance(meta.name, bytes) else str(meta.name)
+            print(f"Found seed league '{raw_name}' in game_id {gid} (season {meta.season})")
+            queue.append(f"{gid}_{SEED_LEAGUE_ID}")
+            break
         except Exception:
             continue
 
-        for l_wrap in leagues:
-            league = getattr(unwrap(l_wrap), "league", unwrap(l_wrap))
-            league_id = str(league.league_id)
-            raw_name = league.name.decode("utf-8") if isinstance(league.name, bytes) else str(league.name)
-            renew = str(getattr(league, "renew", "") or "")
-            renewed = str(getattr(league, "renewed", "") or "")
-
-            combo_key = f"{game_id}_{league_id}"
-            all_user_leagues[combo_key] = (season_str, league_id, game_id, renew, renewed)
-
-            if any(kw in raw_name.lower() for kw in LEAGUE_NAME_KEYWORDS):
-                seed_keys.add(combo_key)
-
-    queue = list(seed_keys)
-    visited = set()
-
+    # 3. Traverse every linked past (`renew`) and future (`renewed`) SBHL season
     while queue:
         current_key = queue.pop(0)
-        if current_key in visited:
+        if current_key in visited or "_" not in current_key:
             continue
         visited.add(current_key)
 
-        if current_key in all_user_leagues:
-            season_str, league_id, game_id, renew, renewed = all_user_leagues[current_key]
-            discovered_seasons[season_str] = (league_id, game_id)
-            for neighbor in (renew, renewed):
+        g_id_str, l_id_str = current_key.split("_", 1)
+        try:
+            q = YahooFantasySportsQuery(
+                league_id=l_id_str,
+                game_code="nhl",
+                game_id=int(g_id_str),
+                env_file_location=auth_dir,
+                save_token_data_to_env_file=True,
+            )
+            meta = q.get_league_metadata()
+            season_str = str(meta.season)
+            discovered_seasons[season_str] = (l_id_str, int(g_id_str))
+
+            for neighbor in (str(getattr(meta, "renew", "") or ""), str(getattr(meta, "renewed", "") or "")):
                 if neighbor and "_" in neighbor and neighbor not in visited:
                     queue.append(neighbor)
-        else:
-            try:
-                g_id_str, l_id_str = current_key.split("_", 1)
-                q = YahooFantasySportsQuery(
-                    league_id=l_id_str,
-                    game_code="nhl",
-                    game_id=int(g_id_str),
-                    yahoo_consumer_key=os.environ.get("YAHOO_CLIENT_ID", "").strip().strip("\"").strip("\x27"),
-                    yahoo_consumer_secret=os.environ.get("YAHOO_CLIENT_SECRET", "").strip().strip("\"").strip("\x27"),
-                    env_file_location=auth_dir,
-                )
-                meta = q.get_league_metadata()
-                season_str = str(meta.season)
-                discovered_seasons[season_str] = (l_id_str, int(g_id_str))
-
-                for neighbor in (str(getattr(meta, "renew", "") or ""), str(getattr(meta, "renewed", "") or "")):
-                    if neighbor and "_" in neighbor and neighbor not in visited:
-                        queue.append(neighbor)
-            except Exception as exc:
-                print(f"Skipping linked league {current_key}: {exc}")
+        except Exception as exc:
+            print(f"Skipping linked league {current_key}: {exc}")
 
     return dict(sorted(discovered_seasons.items(), key=lambda item: item[0]))
 
@@ -175,9 +173,8 @@ def build_hof_database():
             league_id=league_id,
             game_code="nhl",
             game_id=game_id,
-            yahoo_consumer_key=os.environ.get("YAHOO_CLIENT_ID", "").strip().strip("\"").strip("\x27"),
-            yahoo_consumer_secret=os.environ.get("YAHOO_CLIENT_SECRET", "").strip().strip("\"").strip("\x27"),
             env_file_location=auth_dir,
+            save_token_data_to_env_file=True,
         )
 
         league_info = q.get_league_info()
